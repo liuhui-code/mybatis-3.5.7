@@ -61,6 +61,10 @@ public class Reflector {
 
   private Map<String, String> caseInsensitivePropertyMap = new HashMap<>();
 
+  /**
+   * 得到setting之后，调用settingsElement(Properties props)将各值赋值给configuration，同时在这里有重新设置了默认值，所有这一点很重要，configuration中的默认值不一定是真正的默认值。
+   * @param clazz
+   */
   public Reflector(Class<?> clazz) {
     type = clazz;
     addDefaultConstructor(clazz);

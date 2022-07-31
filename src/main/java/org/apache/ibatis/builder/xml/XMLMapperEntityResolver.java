@@ -32,8 +32,8 @@ import org.xml.sax.SAXException;
  */
 public class XMLMapperEntityResolver implements EntityResolver {
 
-  private static final String IBATIS_CONFIG_SYSTEM = "ibatis-3-config.dtd";
-  private static final String IBATIS_MAPPER_SYSTEM = "ibatis-3-mapper.dtd";
+  private static final String IBATIS_CONFIG_SYSTEM = "ibatis-3-config.dtd"; // 兼容
+  private static final String IBATIS_MAPPER_SYSTEM = "ibatis-3-mapper.dtd"; // 兼容
   private static final String MYBATIS_CONFIG_SYSTEM = "mybatis-3-config.dtd";
   private static final String MYBATIS_MAPPER_SYSTEM = "mybatis-3-mapper.dtd";
 
@@ -41,7 +41,9 @@ public class XMLMapperEntityResolver implements EntityResolver {
   private static final String MYBATIS_MAPPER_DTD = "org/apache/ibatis/builder/xml/mybatis-3-mapper.dtd";
 
   /**
-   * Converts a public DTD into a local one.
+   * Converts a public DTD into a local one. 将公共的DTD转换为本地模式
+   *
+   * 参数publicId（公共标识符）和systemId（系统标示符），他们是XML 1.0规范的一部分
    *
    * @param publicId
    *          The public id that is what comes after "PUBLIC"

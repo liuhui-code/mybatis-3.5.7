@@ -19,6 +19,9 @@ import org.apache.ibatis.reflection.MetaObject;
 
 /**
  * @author Clinton Begin
+ *
+ * 对象包装器工厂主要用来包装返回result对象，比如说可以用来设置某些敏感字段脱敏或者加密等。默认对象包装器工厂是DefaultObjectWrapperFactory，也就是不使用包装器工厂
+ *
  */
 public interface ObjectWrapperFactory {
 

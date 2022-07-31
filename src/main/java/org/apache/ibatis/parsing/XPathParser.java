@@ -41,14 +41,28 @@ import org.xml.sax.SAXException;
 import org.xml.sax.SAXParseException;
 
 /**
+ *  利用jdk 自带的xml 解析器而非第三方dom4j，底层使用Xpath 解析
+ *
  * @author Clinton Begin
  * @author Kazuki Shimizu
  */
 public class XPathParser {
 
   private final Document document;
+
+  /**
+   * 是否进行DTD 校验
+   */
   private boolean validation;
+
+  /**
+   * xml 实体节点解析器
+   */
   private EntityResolver entityResolver;
+
+  /**
+   * 属性配置
+   */
   private Properties variables;
   private XPath xpath;
 
@@ -233,14 +247,17 @@ public class XPathParser {
       DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
       factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
       factory.setValidating(validation);
-
+      //设置由本工厂创建的解析器是否支持XML命名空间 TODO 什么是XML命名空间
       factory.setNamespaceAware(false);
       factory.setIgnoringComments(true);
       factory.setIgnoringElementContentWhitespace(false);
+      //设置是否将CDATA节点转换为Text节点
       factory.setCoalescing(false);
+      //设置是否展开实体引用节点，这里应该是sql片段引用的关键
       factory.setExpandEntityReferences(true);
 
       DocumentBuilder builder = factory.newDocumentBuilder();
+      //设置解析mybatis xml文档节点的解析器,也就是上面的XMLMapperEntityResolver
       builder.setEntityResolver(entityResolver);
       builder.setErrorHandler(new ErrorHandler() {
         @Override
