@@ -34,6 +34,10 @@ import org.apache.ibatis.session.SqlSession;
 public class MapperRegistry {
 
   private final Configuration config;
+
+  /**
+   * knownMappers是MapperRegistry的主要字段，维护了Mapper接口和代理类的映射关系,key是mapper接口类，value是MapperProxyFactory
+   */
   private final Map<Class<?>, MapperProxyFactory<?>> knownMappers = new HashMap<>();
 
   public MapperRegistry(Configuration config) {
@@ -58,12 +62,15 @@ public class MapperRegistry {
   }
 
   public <T> void addMapper(Class<T> type) {
+    // 对于mybatis mapper接口文件，必须是interface，不能是class
     if (type.isInterface()) {
+      // 判重，确保只会加载一次不会被覆盖
       if (hasMapper(type)) {
         throw new BindingException("Type " + type + " is already known to the MapperRegistry.");
       }
       boolean loadCompleted = false;
       try {
+        // 为mapper接口创建一个MapperProxyFactory代理
         knownMappers.put(type, new MapperProxyFactory<>(type));
         // It's important that the type is added before the parser is run
         // otherwise the binding may automatically be attempted by the
@@ -72,6 +79,7 @@ public class MapperRegistry {
         parser.parse();
         loadCompleted = true;
       } finally {
+        //剔除解析出现异常的接口
         if (!loadCompleted) {
           knownMappers.remove(type);
         }

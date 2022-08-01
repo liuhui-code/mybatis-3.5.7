@@ -78,6 +78,7 @@ public class XMLMapperBuilder extends BaseBuilder {
   }
 
   public XMLMapperBuilder(InputStream inputStream, Configuration configuration, String resource, Map<String, XNode> sqlFragments) {
+    //　加载的基本逻辑和加载mybatis-config一样的过程，使用XPathParser进行总控，XMLMapperEntityResolver进行具体判断。
     this(new XPathParser(inputStream, true, configuration.getVariables(), new XMLMapperEntityResolver()),
         configuration, resource, sqlFragments);
   }
@@ -113,9 +114,13 @@ public class XMLMapperBuilder extends BaseBuilder {
         throw new BuilderException("Mapper's namespace cannot be empty");
       }
       builderAssistant.setCurrentNamespace(namespace);
+      //解析缓存参照cache-ref。参照缓存顾名思义，就是共用其他缓存的设置
       cacheRefElement(context.evalNode("cache-ref"));
+      // 解析缓存cache
       cacheElement(context.evalNode("cache"));
+      // 解析参数映射parameterMap
       parameterMapElement(context.evalNodes("/mapper/parameterMap"));
+      // 解析结果集映射resultMap
       resultMapElements(context.evalNodes("/mapper/resultMap"));
       sqlElement(context.evalNodes("/mapper/sql"));
       buildStatementFromContext(context.evalNodes("select|insert|update|delete"));
@@ -187,6 +192,14 @@ public class XMLMapperBuilder extends BaseBuilder {
     }
   }
 
+  /**
+   * <cache-ref namespace=”com.someone.application.data.SomeMapper”/>
+   *
+   * 缓存参考因为通过namespace指向其他的缓存。所以会出现第一次解析的时候指向的缓存还不存在的情况，所以需要在所有的mapper文件加载完成后进行二次处理，
+   * 不仅仅是缓存参考，其他的CRUD也一样。所以在XMLMapperBuilder.configuration中有很多的incompleteXXX，这种设计模式类似于JVM GC中的mark and sweep，
+   * 标记、然后处理。所以当捕获到IncompleteElementException异常时，没有终止执行，而是将指向的缓存不存在的cacheRefResolver添加到configuration.incompleteCacheRef中。
+   * @param context
+   */
   private void cacheRefElement(XNode context) {
     if (context != null) {
       configuration.addCacheRef(builderAssistant.getCurrentNamespace(), context.getStringAttribute("namespace"));
@@ -199,6 +212,15 @@ public class XMLMapperBuilder extends BaseBuilder {
     }
   }
 
+  /**
+   * 默认情况下，mybatis使用的是永久缓存PerpetualCache，读取或设置各个属性默认值之后，调用builderAssistant.useNewCache构建缓存，
+   * 其中的CacheBuilder使用了build模式（在effective里面，建议有4个以上可选属性时，应该为对象提供一个builder便于使用），
+   * 只要实现org.apache.ibatis.cache.Cache接口，就是合法的mybatis缓存。
+   *
+   *   cache 缓存，用了装饰器模式, 装饰器模式和代理模式有什么区别和相同点呢？
+   *     他们都是对原有类和方法的增强，装饰器是核心业务能力的增强 和 代理模式的核心功能不变，做些和业务功能无关的增强。
+   * @param context
+   */
   private void cacheElement(XNode context) {
     if (context != null) {
       String type = context.getStringAttribute("type", "PERPETUAL");
@@ -246,6 +268,7 @@ public class XMLMapperBuilder extends BaseBuilder {
         resultMapElement(resultMapNode);
       } catch (IncompleteElementException e) {
         // ignore, it will be retried
+        // 在内部实现中将未完成的元素添加到configuration.incomplete中了
       }
     }
   }
@@ -254,6 +277,43 @@ public class XMLMapperBuilder extends BaseBuilder {
     return resultMapElement(resultMapNode, Collections.emptyList(), null);
   }
 
+  /**
+   * 所有下的最底层子元素比如、、等本质上都属于一个映射,只不过有着额外的标记比如是否嵌套，是否构造器等。
+   *
+   * <resultMap id="detailedBlogResultMap" type="Blog">
+   *   <constructor>
+   *     <idArg column="blog_id" javaType="int"/>
+   *     <arg column="blog_name" javaType="string"/>
+   *   </constructor>
+   *   <result property="title" column="blog_title"/>
+   *   <association property="author" javaType="Author">
+   *     <id property="id" column="author_id"/>
+   *     <result property="username" column="author_username"/>
+   *     <result property="password" column="author_password"/>
+   *     <result property="email" column="author_email"/>
+   *     <result property="bio" column="author_bio"/>
+   *     <result property="favouriteSection" column="author_favourite_section"/>
+   *   </association>
+   *   <collection property="posts" ofType="Post">
+   *     <id property="id" column="post_id"/>
+   *     <result property="subject" column="post_subject"/>
+   *     <association property="author" javaType="Author"/>
+   *     <collection property="comments" ofType="Comment">
+   *       <id property="id" column="comment_id"/>
+   *     </collection>
+   *     <collection property="tags" ofType="Tag" >
+   *       <id property="id" column="tag_id"/>
+   *     </collection>
+   *     <discriminator javaType="int" column="draft">
+   *       <case value="1" resultType="DraftPost"/>
+   *     </discriminator>
+   *   </collection>
+   *
+   * @param resultMapNode
+   * @param additionalResultMappings
+   * @param enclosingType
+   * @return
+   */
   private ResultMap resultMapElement(XNode resultMapNode, List<ResultMapping> additionalResultMappings, Class<?> enclosingType) {
     ErrorContext.instance().activity("processing " + resultMapNode.getValueBasedIdentifier());
     String type = resultMapNode.getStringAttribute("type",
@@ -318,6 +378,32 @@ public class XMLMapperBuilder extends BaseBuilder {
     }
   }
 
+  /**
+   * <discriminator javaType="int" column="vehicle_type">
+   *     <case value="1" resultMap="carResult"/>
+   *     <case value="2" resultMap="truckResult"/>
+   *     <case value="3" resultMap="vanResult"/>
+   *     <case value="4" resultMap="suvResult"/>
+   *   </discriminator>'
+   * 鉴别器非常容易理解,它的表现很像Java语言中的switch语句。定义鉴别器也是通过column和javaType属性来唯一标识，column是用来确定某个字段是否为鉴别器
+   *
+   * 对于上述的鉴别器，如果 vehicle_type=1, 那就会使用下列这个结果映射
+   *  <resultMap id="carResult" type="Car">
+   *   <result property="doorCount" column="door_count" />
+   * </resultMap>
+   *
+   *  其逻辑和之前处理构造器的时候类似，同样的使用build建立鉴别器并返回鉴别器实例，鉴别器中也可以嵌套association和collection。
+   *  他们的实现逻辑和常规resultMap中的处理方式完全相同
+   *
+   *  和构造器不一样的是，鉴别器中包含了case分支和对应的resultMap的映射
+   *
+   *  最后所有的子节点都被解析到resultMappings
+   *
+   * @param context
+   * @param resultType
+   * @param resultMappings
+   * @return
+   */
   private Discriminator processDiscriminatorElement(XNode context, Class<?> resultType, List<ResultMapping> resultMappings) {
     String column = context.getStringAttribute("column");
     String javaType = context.getStringAttribute("javaType");
@@ -368,6 +454,13 @@ public class XMLMapperBuilder extends BaseBuilder {
     return context.getStringAttribute("databaseId") == null;
   }
 
+  /**
+   * buildResultMappingFromContext建立具体的resultMap。buildResultMappingFromContext是个公共工具方法，会被反复使用
+   * @param context
+   * @param resultType
+   * @param flags
+   * @return
+   */
   private ResultMapping buildResultMappingFromContext(XNode context, Class<?> resultType, List<ResultFlag> flags) {
     String property;
     if (flags.contains(ResultFlag.CONSTRUCTOR)) {
@@ -379,6 +472,8 @@ public class XMLMapperBuilder extends BaseBuilder {
     String javaType = context.getStringAttribute("javaType");
     String jdbcType = context.getStringAttribute("jdbcType");
     String nestedSelect = context.getStringAttribute("select");
+    // resultMap中可以包含association或collection复合类型,这些复合类型可以使用外部定义的公用resultMap或者内嵌resultMap,
+    // 所以这里的处理逻辑是如果有resultMap就获取resultMap,如果没有,那就动态生成一个。如果自动生成的话，他的resultMap id通过调用XNode.getValueBasedIdentifier()来获得
     String nestedResultMap = context.getStringAttribute("resultMap", () ->
         processNestedResultMappings(context, Collections.emptyList(), resultType));
     String notNullColumn = context.getStringAttribute("notNullColumn");
@@ -393,7 +488,27 @@ public class XMLMapperBuilder extends BaseBuilder {
     return builderAssistant.buildResultMapping(resultType, property, column, javaTypeClass, jdbcTypeEnum, nestedSelect, nestedResultMap, notNullColumn, columnPrefix, typeHandlerClass, flags, resultSet, foreignColumn, lazy);
   }
 
+  /**
+   * 上述过程主要用于获取各个属性，其中唯一值得注意的是processNestedResultMappings，它用于解析包含的association或collection复合类型,
+   * 这些复合类型可以使用外部定义的公用resultMap或者内嵌resultMap, 所以这里的处理逻辑是如果是外部resultMap就获取对应resultMap的名称,如果没有,
+   * 那就动态生成一个。如果自动生成的话，其resultMap id通过调用XNode.getValueBasedIdentifier()来获得。
+   * 由于colletion和association、discriminator里面还可以包含复合类型，所以将进行递归解析直到所有的子元素都为基本列位置，它在使用层面的目的在于将关系模型映射为对象树模型
+   * <resultMap id="blogResult" type="Blog">
+   *   <id property="id" column="blog_id" />
+   *   <result property="title" column="blog_title"/>
+   *   <association property="author" column="blog_author_id" javaType="Author" resultMap="authorResult"/>
+   *   <collection property="posts" javaType="ArrayList" column="id" ofType="Post" select="selectPostsForBlog"/>
+   * </resultMap>
+   *
+   * 注意“ofType”属性，这个属性用来区分JavaBean(或字段)属性类型和集合中存储的对象类型
+   *
+   * @param context
+   * @param resultMappings
+   * @param enclosingType
+   * @return
+   */
   private String processNestedResultMappings(XNode context, List<ResultMapping> resultMappings, Class<?> enclosingType) {
+    //对于其中的每个非select属性映射，调用resultMapElement进行递归解析。其中的case节点主要用于鉴别器情况，
     if (Arrays.asList("association", "collection", "case").contains(context.getName())
         && context.getStringAttribute("select") == null) {
       validateCollection(context, enclosingType);

@@ -93,6 +93,12 @@ import org.apache.ibatis.type.UnknownTypeHandler;
 /**
  * @author Clinton Begin
  * @author Kazuki Shimizu
+ *
+ * 其中的MapperBuilderAssistant和XMLConfigBuilder一样，都是继承于BaseBuilder。Select.class/Insert.class等注解指示该方法对应的真实sql语句类型分别是select/insert。
+ * SelectProvider.class/InsertProvider.class主要用于动态SQL，它们允许你指定一个类名和一个方法在具体执行时返回要运行的SQL语句。MyBatis会实例化这个类，然后执行指定的方法。
+ *
+ * MapperBuilderAssistant初始化完成之后，就调用build.parse()进行具体的mapper接口文件加载与解析
+ *
  */
 public class MapperAnnotationBuilder {
 
@@ -114,9 +120,11 @@ public class MapperAnnotationBuilder {
 
   public void parse() {
     String resource = type.toString();
+    //首先根据mapper接口的字符串表示判断是否已经加载,避免重复加载,正常情况下应该都没有加载
     if (!configuration.isResourceLoaded(resource)) {
       loadXmlResource();
       configuration.addLoadedResource(resource);
+      // 每个mapper文件自成一个namespace，通常自动匹配就是这么来的，约定俗成代替人工设置最简化常见的开发
       assistant.setCurrentNamespace(type.getName());
       parseCache();
       parseCacheRef();
@@ -124,6 +132,7 @@ public class MapperAnnotationBuilder {
         if (!canHaveStatement(method)) {
           continue;
         }
+        //如果是查询，且没有明确设置ResultMap，则根据返回类型自动解析生成ResultMap
         if (getAnnotationWrapper(method, false, Select.class, SelectProvider.class).isPresent()
             && method.getAnnotation(ResultMap.class) == null) {
           parseResultMap(method);
@@ -224,9 +233,13 @@ public class MapperAnnotationBuilder {
   }
 
   private String parseResultMap(Method method) {
+    // 获取方法的返回类型
     Class<?> returnType = getReturnType(method);
+    // 获取构造器才参数
     Arg[] args = method.getAnnotationsByType(Arg.class);
+    // 获取@Results注解,也就是注解形式的结果映射
     Result[] results = method.getAnnotationsByType(Result.class);
+    // 获取鉴别器
     TypeDiscriminator typeDiscriminator = method.getAnnotation(TypeDiscriminator.class);
     String resultMapId = generateResultMapName(method);
     applyResultMap(resultMapId, returnType, args, results, typeDiscriminator);
@@ -261,7 +274,10 @@ public class MapperAnnotationBuilder {
 
   private void createDiscriminatorResultMaps(String resultMapId, Class<?> resultType, TypeDiscriminator discriminator) {
     if (discriminator != null) {
+      // 对于鉴别器来说，和XML配置的差别在于xml中可以外部公用的resultMap,在注解中，则只提供了内嵌式的resultMap定义
       for (Case c : discriminator.cases()) {
+        // 从内部实现的角度,因为内嵌式的resultMap定义也会创建resultMap,所以XML的实现也一样，对于内嵌式鉴别器每个分支resultMap,
+        // 其命名为映射方法的resultMapId-Case.value()。这样在运行时，只要知道resultMap中包含了鉴别器之后，获取具体的鉴别器映射就很简单了，map.get()一下就得到了
         String caseResultMapId = resultMapId + "-" + c.value();
         List<ResultMapping> resultMappings = new ArrayList<>();
         // issue #136
@@ -294,18 +310,26 @@ public class MapperAnnotationBuilder {
   }
 
   void parseStatement(Method method) {
+    // 获取参数类型,如果有多个参数,这种情况下就返回org.apache.ibatis.binding.MapperMethod.ParamMap.class，ParamMap是一个继承于HashMap的类，否则返回实际类型
     final Class<?> parameterTypeClass = getParameterType(method);
+    // 获取语言驱动器
     final LanguageDriver languageDriver = getLanguageDriver(method);
 
     getAnnotationWrapper(method, true, statementAnnotationTypes).ifPresent(statementAnnotation -> {
+      // 获取方法的SqlSource对象,只有指定了@Select/@Insert/@Update/@Delete或者对应的Provider的方法才会被当作mapper,否则只是和mapper文件中对应语句的一个运行时占位符
       final SqlSource sqlSource = buildSqlSource(statementAnnotation.getAnnotation(), parameterTypeClass, languageDriver, method);
+      // 获取语句的CRUD类型
       final SqlCommandType sqlCommandType = statementAnnotation.getSqlCommandType();
-      final Options options = getAnnotationWrapper(method, false, Options.class).map(x -> (Options)x.getAnnotation()).orElse(null);
+      // 获取方法的属性设置，对应<select>中的各种属性
+      final Options options = getAnnotationWrapper(method, false, Options.class)
+        .map(x -> (Options)x.getAnnotation())
+        .orElse(null);
       final String mappedStatementId = type.getName() + "." + method.getName();
 
       final KeyGenerator keyGenerator;
       String keyProperty = null;
       String keyColumn = null;
+      // 只有INSERT/UPDATE才解析SelectKey选项,总体来说，它的实现逻辑和XML基本一致，这里不展开详述
       if (SqlCommandType.INSERT.equals(sqlCommandType) || SqlCommandType.UPDATE.equals(sqlCommandType)) {
         // first check for SelectKey annotation - that overrides everything else
         SelectKey selectKey = getAnnotationWrapper(method, false, SelectKey.class).map(x -> (SelectKey)x.getAnnotation()).orElse(null);
@@ -347,6 +371,8 @@ public class MapperAnnotationBuilder {
 
       String resultMapId = null;
       if (isSelect) {
+        // 解析@ResultMap注解,如果有@ResultMap注解,就是用它，否则才解析@Results
+        // @ResultMap注解用于给@Select和@SelectProvider注解提供在xml配置的<resultMap>,如果一个方法上同时出现@Results或者@ConstructorArgs等和结果映射有关的注解,那么@ResultMap会覆盖后面两者的注解
         ResultMap resultMapAnnotation = method.getAnnotation(ResultMap.class);
         if (resultMapAnnotation != null) {
           resultMapId = String.join(",", resultMapAnnotation.value());
@@ -645,8 +671,9 @@ public class MapperAnnotationBuilder {
       Collection<Class<? extends Annotation>> targetTypes) {
     String databaseId = configuration.getDatabaseId();
     Map<String, AnnotationWrapper> statementAnnotations = targetTypes.stream()
-        .flatMap(x -> Arrays.stream(method.getAnnotationsByType(x))).map(AnnotationWrapper::new)
-        .collect(Collectors.toMap(AnnotationWrapper::getDatabaseId, x -> x, (existing, duplicate) -> {
+      .flatMap(x -> Arrays.stream(method.getAnnotationsByType(x)))
+      .map(AnnotationWrapper::new)
+      .collect(Collectors.toMap(AnnotationWrapper::getDatabaseId, x -> x, (existing, duplicate) -> {
           throw new BuilderException(String.format("Detected conflicting annotations '%s' and '%s' on '%s'.",
               existing.getAnnotation(), duplicate.getAnnotation(),
               method.getDeclaringClass().getName() + "." + method.getName()));
